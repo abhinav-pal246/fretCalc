@@ -51,7 +51,7 @@ st.sidebar.header("📡 Experimental Inputs")
 # F0 is updated when the user clicks 'Auto-detect' in the main area
 f0 = st.sidebar.number_input("Initial Donor Intensity (F₀)", 
                              value=float(st.session_state.auto_f0),
-                             help="Peak intensity from the Donor ID column")
+                             help="Pre-filled with the second-highest intensity from the Donor ID column")
 
 # F is manually entered by the user
 f_val = st.sidebar.number_input("Quenched Intensity (F)", value=2278.21)
@@ -76,16 +76,20 @@ if uploaded_file:
         id_col = col2.selectbox("Donor Intensity Column (ID)", df.columns)
         ea_col = col3.selectbox("Acceptor Molar Absorptivity Column (εA)", df.columns)
 
-        # TRIGGER: Find max numeric value in the Donor Intensity (ID) column
-        if st.button("🔍 Auto-detect F₀ from Peak Intensity"):
-            temp_id = pd.to_numeric(df[id_col], errors='coerce')
-            max_intensity = temp_id.max()
-            if not np.isnan(max_intensity):
-                st.session_state.auto_f0 = max_intensity
-                st.success(f"Detected Peak Intensity (F₀): {max_intensity:.2f}")
-                st.rerun() # Refresh to update the sidebar input
+        # TRIGGER: Find the SECOND highest value in the Donor Intensity (ID) column
+        if st.button("🔍 Auto-detect F₀ (Second-Highest Peak)"):
+            temp_id = pd.to_numeric(df[id_col], errors='coerce').dropna()
+            
+            if len(temp_id) >= 2:
+                # Retrieve the top two values and select the second one
+                top_values = temp_id.nlargest(2).values
+                second_highest = top_values[1]
+                
+                st.session_state.auto_f0 = second_highest
+                st.success(f"Detected Second-Highest Intensity (F₀): {second_highest:.2f}")
+                st.rerun() 
             else:
-                st.error("Could not find a numeric peak in the selected column.")
+                st.error("Insufficient numeric data in the selected column to find the second-highest peak.")
 
         if st.button("🚀 Calculate FRET Parameters"):
             try:
