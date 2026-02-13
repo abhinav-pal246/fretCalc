@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 # --- PAGE CONFIGURATION ---
 st.set_page_config(page_title="FRET Analysis Pro", layout="wide")
 
+# CUSTOM CSS: Forces high-contrast visibility for metrics and professional dark theme
 st.markdown("""
     <style>
     .main { background-color: #0e1117; color: white; }
@@ -30,25 +31,27 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- SIDEBAR: PHYSICAL CONSTANTS ---
+# --- INITIALIZE SESSION STATE ---
+if 'auto_f0' not in st.session_state:
+    st.session_state.auto_f0 = 3787.66 # Standard baseline from HSA study
+
+# --- SIDEBAR: INPUTS ---
 st.sidebar.header("🔬 Physical Constants")
-# [cite_start]Constants derived from your research paper [cite: 702]
-k2 = st.sidebar.number_input("Orientation Factor (K²)", value=0.667, help="Standard value 2/3")
-phi_d = st.sidebar.number_input("Donor Quantum Yield (ΦD)", value=0.118, format="%.3f")
-n = st.sidebar.number_input("Refractive Index (n)", value=1.33)
+# Constants derived from experimental setup [cite: 702]
+k2 = st.sidebar.number_input("Orientation Factor (K²)", value=0.667, help="Standard value 2/3") # [cite: 702]
+phi_d = st.sidebar.number_input("Donor Quantum Yield (ΦD)", value=0.118, format="%.3f") # [cite: 702]
+n = st.sidebar.number_input("Refractive Index (n)", value=1.33) # [cite: 702]
 
 st.sidebar.divider()
 st.sidebar.header("📡 Experimental Inputs")
 
-# Using session state to allow the app to suggest the detected F0
-if 'detected_f0' not in st.session_state:
-    st.session_state.detected_f0 = 3787.66 # Default fallback
-
+# F0 is automatically updated when the user clicks 'Auto-detect' below
 f0 = st.sidebar.number_input("Initial Donor Intensity (F₀)", 
-                             value=float(st.session_state.detected_f0),
-                             help="Auto-calculated from peak intensity if file is uploaded")
+                             value=float(st.session_state.auto_f0),
+                             help="Peak intensity from the Donor column") #
 
-f_val = st.sidebar.number_input("Quenched Intensity (F)", value=2278.21)
+# F is manually entered by the user
+f_val = st.sidebar.number_input("Quenched Intensity (F)", value=2278.21) #
 
 # --- MAIN INTERFACE ---
 st.title("🧪 Advanced FRET Calculator")
@@ -64,49 +67,51 @@ if uploaded_file:
             df = pd.read_excel(uploaded_file)
         st.success("File uploaded successfully!")
         
-        # Column Mapping
         st.subheader("🔗 Column Mapping")
         col1, col2, col3 = st.columns(3)
         wl_col = col1.selectbox("Wavelength Column (λ)", df.columns)
         id_col = col2.selectbox("Donor Intensity Column (ID)", df.columns)
         ea_col = col3.selectbox("Acceptor Molar Absorptivity Column (εA)", df.columns)
 
-        # Logic to automatically find the peak for F0
-        if st.button("🔍 Auto-detect F0 from Peak"):
-            # Ensure column is numeric
+        # TRIGGER: Find max value in Donor Intensity column
+        if st.button("🔍 Find Peak Donor Intensity (F₀)"):
             temp_id = pd.to_numeric(df[id_col], errors='coerce')
-            peak_f0 = temp_id.max()
-            if not np.isnan(peak_f0):
-                st.session_state.detected_f0 = peak_f0
-                st.rerun() # Refresh to update the sidebar input
+            max_intensity = temp_id.max()
+            if not np.isnan(max_intensity):
+                st.session_state.auto_f0 = max_intensity
+                st.success(f"Detected Peak Intensity: {max_intensity:.2f}")
+                st.rerun()
             else:
-                st.error("Could not find a valid peak in the selected column.")
+                st.error("Could not find a numeric peak in the selected column.")
 
         if st.button("🚀 Calculate FRET Parameters"):
             try:
-                # Data Cleaning
+                # Standard Data Cleaning
                 for col in [wl_col, id_col, ea_col]:
                     df[col] = pd.to_numeric(df[col], errors='coerce')
                 
                 clean_df = df.dropna(subset=[wl_col, id_col, ea_col]).sort_values(by=wl_col)
 
-                # [cite_start]1. Calculation of Overlap Integral (J) [cite: 693]
+                # 1. Overlap Integral (J)
                 area_id = simpson(y=clean_df[id_col], x=clean_df[wl_col])
                 clean_df['norm_Id'] = clean_df[id_col] / area_id
                 
+                # Integrand calculation: ID(λ) * εA(λ) * λ⁴
                 clean_df['J_integrand'] = clean_df['norm_Id'] * clean_df[ea_col] * (clean_df[wl_col]**4)
                 j_value = simpson(y=clean_df['J_integrand'], x=clean_df[wl_col])
                 
-                # [cite_start]2. Calculation of R0 (Förster Distance) [cite: 700]
+                # 2. Förster Distance (R₀) [cite: 700]
                 r0 = 0.02108 * ((k2 * phi_d * (n**-4) * j_value) ** (1/6))
                 
                 # 3. Efficiency (E) and Distance (r)
                 e_efficiency = 1 - (f_val / f0)
                 r_distance = r0 * (((1 - e_efficiency) / e_efficiency) ** (1/6))
 
-                # --- DISPLAY RESULTS ---
+                # --- RESULTS DISPLAY ---
                 st.divider()
                 res_col1, res_col2, res_col3, res_col4 = st.columns(4)
+                
+                # Format J to 3 decimal places in scientific notation
                 formatted_j = "{:.3e}".format(j_value).replace("e+", " x 10^")
                 
                 res_col1.metric("Overlap Integral (J)", formatted_j)
@@ -114,34 +119,26 @@ if uploaded_file:
                 res_col3.metric("Efficiency (E)", f"{e_efficiency:.4f}")
                 res_col4.metric("Distance (r)", f"{r_distance:.4f} nm")
 
-                st.info(f"Summary Results: E = {e_efficiency:.3f} | R₀ = {r0:.3f} nm | r = {r_distance:.3f} nm")
-
                 # --- VISUALIZATION ---
                 
                 fig, ax1 = plt.subplots(figsize=(10, 4))
-                ax1.plot(clean_df[wl_col], clean_df['norm_Id'], color='#2563eb', label='Donor Emission (Normalized)')
+                ax1.plot(clean_df[wl_col], clean_df['norm_Id'], color='#2563eb', label='Donor Emission')
                 ax1.fill_between(clean_df[wl_col], clean_df['norm_Id'], alpha=0.2, color='#2563eb')
-                ax1.set_xlabel('Wavelength (nm)')
                 ax1.set_ylabel('Normalized Intensity', color='#2563eb')
                 
                 ax2 = ax1.twinx()
-                ax2.plot(clean_df[wl_col], clean_df[ea_col], color='#dc2626', linestyle='--', label='Acceptor Absorption (εA)')
+                ax2.plot(clean_df[wl_col], clean_df[ea_col], color='#dc2626', linestyle='--', label='Acceptor Absorption')
                 ax2.set_ylabel('Molar Absorptivity (εA)', color='#dc2626')
                 
-                plt.title("FRET Overlap Region")
+                plt.title("Spectral Overlap Analysis")
                 st.pyplot(fig)
 
-                # Validation
-                st.subheader("✅ Technical Validation")
-                if 0.5 * r0 <= r_distance <= 1.5 * r0:
-                    st.success(f"Theoretical validation complete: r ({r_distance:.2f} nm) is within range (0.5R₀ to 1.5R₀).")
-                else:
-                    st.warning("The calculated distance is outside the optimal sensitivity range.")
+                st.info(f"Summary Results: E = {e_efficiency:.3f} | R₀ = {r0:.3f} nm | r = {r_distance:.3f} nm")
 
             except Exception as e:
                 st.error(f"Calculation Error: {e}")
 
     except Exception as e:
-        st.error(f"Error: {e}")
+        st.error(f"File Error: {e}")
 else:
-    st.info("👋 Upload data to begin.")
+    st.info("👋 Upload spectral data to begin analysis.")
